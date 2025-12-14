@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Doodle Jump with Clouds and Sound</title>
+    <style>
+        html, body {
+            margin: 0;
+            height: 100%;
+            width: 100%;
+            background: #87CEEB;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            font-family: Arial, sans-serif;
+        }
+
+        canvas {
+            background: #87CEEB;
+            border: 2px solid #000;
+            display: block;
+            margin-bottom: 20px;
+        }
+
+        #bottom-info {
+            position: fixed;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            font-size: 16px;
+            color: black;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            background: rgba(255,255,255,0.7);
+            padding: 4px 8px;
+            border-radius: 5px;
+            box-shadow: 0 0 5px rgba(0,0,0,0.3);
+        }
+
+        #bottom-info a {
+            text-decoration: underline;
+            color: #007BFF;
+            font-weight: bold;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+<canvas id="gameCanvas" width="400" height="600"></canvas>
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+const canvasWidth = canvas.width;
+const canvasHeight = canvas.height;
+
+const player = {
+    x: canvasWidth / 2 - 20,
+    y: canvasHeight - 100,
+    width: 40,
+    height: 40,
+    dy: 0,
+    gravity: 0.5,
+    jumpPower: -12,
+    moveSpeed: 5
+};
+
+const platformHeight = 10;
+const platformWidth = 60;
+const maxJumpHeight = Math.pow(Math.abs(player.jumpPower), 2) / (2 * player.gravity);
+
+let platforms = [];
+const platformCount = 10;
+
+let enemies = [];
+const enemyWidth = 30;
+const enemyHeight = 30;
+
+let score = 0;
+let cumulativeOffset = 0;
+
+let leftPressed = false;
+let rightPressed = false;
+
+let pupilOffsetX = 2;
+let lastDirection = 1;
+
+// Clouds
+let clouds = [];
+const cloudCount = 5;
+
+function createClouds() {
+    clouds = [];
+    for (let i = 0; i < cloudCount; i++) {
+        clouds.push({
+            x: Math.random() * canvasWidth,
+            y: Math.random() * canvasHeight,
+            width: 60 + Math.random() * 40,
+            height: 30 + Math.random() * 20,
+            speed: 0.2 + Math.random() * 0.3
+        });
+    }
+}
+
+function drawClouds() {
+    ctx.fillStyle = "white";
+    clouds.forEach(cloud => {
+        ctx.beginPath();
+        ctx.ellipse(cloud.x, cloud.y, cloud.width / 2, cloud.height / 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Move clouds up with the player
+        cloud.y -= player.dy * 0.1; // Adjust the factor for cloud movement speed
+
+        // Check if cloud is off-screen
+        if (cloud.y + cloud.height < 0) {
+            cloud.y = canvasHeight + cloud.height; // Reset cloud to bottom
+            cloud.x = Math.random() * canvasWidth; // Randomize X position
+        }
+    });
+}
+
+// Sounds
+const jumpSound = new Audio("jump.wav");
+const trampolineSound = new Audio("trampoline.wav");
+const dieSound = new Audio("die.wav");
+
+function isOverlapping(x, y) {
+    const buffer = 5;
+    for (let p of platforms) {
+        if (
+            x < p.x + p.width + buffer &&
+            x + platformWidth + buffer > p.x &&
+            y < p.y + p.height + buffer &&
+            y + platformHeight + buffer > p.y
+        ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function createPlatform(x, y, vx = 0, trampoline = false) {
+    platforms.push({x, y, width: platformWidth, height: platformHeight, vx, trampoline});
+}
+
+function createPlatforms() {
+    platforms = [];
+    const startX = player.x - 10;
+    const startY = player.y + player.height + 10;
+    createPlatform(startX, startY, 0, false);
+
+    const spacing = maxJumpHeight * 0.8;
+    const movingPlatformYs = new Set(); // y-levels used by moving platforms
+    const occupiedYs = new Set();       // y-levels used by trampolines or brown platforms
+
+    let prevX = startX;
+
+    for (let i = 1; i < platformCount; i++) {
+        const y = Math.max(startY - i * spacing, 0);
+        let x, attempts = 0;
+        let vx = 0;
+        let trampoline = false;
+
+        trampoline = Math.random() < 0.15;
+        if (trampoline) occupiedYs.add(y);
+
+        // Decide if moving platform
+        if (Math.random() < 0.25) {
+            if (!movingPlatformYs.has(y) && !occupiedYs.has(y)) {
+                vx = Math.random() < 0.5 ? 1.5 : -1.5;
+                movingPlatformYs.add(y);
+                occupiedYs.add(y);
+            }
+        } else {
+            if (!occupiedYs.has(y)) {
+                occupiedYs.add(y);
+            } else {
+                continue;
+            }
+        }
+
+        // Ensure platform is reachable horizontally
+        const maxHorizontalStep = player.moveSpeed * 20;
+        do {
+            x = prevX + (Math.random() * 2 - 1) * maxHorizontalStep;
+            if (x < 0) x = 0;
+            if (x > canvasWidth - platformWidth) x = canvasWidth - platformWidth;
+            attempts++;
+        } while (isOverlapping(x, y) && attempts < 100);
+        prevX = x;
+
+        createPlatform(x, y, vx, trampoline);
+    }
+
+    enemies = [];
+    platforms.slice(1).forEach(p => {
+        if (Math.random() < 0.01) {
+            enemies.push({
+                x: p.x + p.width / 2 - enemyWidth / 2,
+                y: p.y - enemyHeight,
+                width: enemyWidth,
+                height: enemyHeight,
+                vx: Math.random() < 0.5 ? 1.5 : -1.5
+            });
+        }
+    });
+}
+
+function roundRect(ctx, x, y, width, height, radius){
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + width - radius, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+    ctx.lineTo(x + width, y + height - radius);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    ctx.lineTo(x + radius, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.fill();
+}
+
+document.addEventListener("keydown", e => {
+    if(e.key === "ArrowLeft") leftPressed = true;
+    if(e.key === "ArrowRight") rightPressed = true;
+});
+document.addEventListener("keyup", e => {
+    if(e.key === "ArrowLeft") leftPressed = false;
+    if(e.key === "ArrowRight") rightPressed = false;
+});
+
+function update() {
+    if(leftPressed) {
+        player.x -= player.moveSpeed;
+        pupilOffsetX = -2;
+        lastDirection = -1;
+    } else if(rightPressed) {
+        player.x += player.moveSpeed;
+        pupilOffsetX = 2;
+        lastDirection = 1;
+    } else {
+        pupilOffsetX = lastDirection * 2;
+    }
+
+    if(player.x > canvasWidth) player.x = -player.width;
+    if(player.x < -player.width) player.x = canvasWidth;
+
+    player.dy += player.gravity;
+    player.y += player.dy;
+
+    platforms.forEach(p => {
+        if(player.dy > 0 &&
+           player.x + player.width > p.x &&
+           player.x < p.x + p.width &&
+           player.y + player.height > p.y &&
+           player.y + player.height < p.y + p.height + player.dy) {
+
+               player.dy = p.trampoline ? -20 : player.jumpPower;
+               if(p.trampoline) trampolineSound.play();
+               else jumpSound.play();
+        }
+    });
+
+    if(player.y < canvasHeight / 2) {
+        const diff = canvasHeight / 2 - player.y;
+        player.y = canvasHeight / 2;
+        platforms.forEach(p => p.y += diff);
+        enemies.forEach(e => e.y += diff);
+        clouds.forEach(c => c.y += diff); // Move clouds up with the player
+        cumulativeOffset += diff;
+        score = Math.floor(cumulativeOffset);
+    }
+
+    platforms.forEach(p => {
+        p.x += p.vx;
+        if(p.x < 0 || p.x + p.width > canvasWidth) p.vx *= -1;
+    });
+
+    enemies.forEach(e => {
+        e.x += e.vx;
+        if(e.x < 0 || e.x + e.width > canvasWidth) e.vx *= -1;
+    });
+
+    platforms.forEach(p => {
+        if(p.y > canvasHeight) {
+            let x, attempts = 0;
+            do {
+                x = Math.random() * (canvasWidth - platformWidth);
+                attempts++;
+            } while (isOverlapping(x, 0) && attempts < 100);
+            p.y = 0;
+            p.x = x;
+            p.vx = Math.random() < 0.25 ? (Math.random() < 0.5 ? 1.5 : -1.5) : 0;
+            p.trampoline = Math.random() < 0.15;
+        }
+    });
+
+    enemies.forEach(e => {
+        if(e.y > canvasHeight) {
+            e.y = 0;
+            e.x = Math.random() * (canvasWidth - enemyWidth);
+            e.vx = Math.random() < 0.5 ? 1.5 : -1.5;
+        }
+    });
+
+    enemies.forEach(e => {
+        if(player.x + player.width > e.x &&
+           player.x < e.x + e.width &&
+           player.y + player.height > e.y &&
+           player.y < e.y + e.height) {
+               resetGame();
+           }
+    });
+
+    if(player.y > canvasHeight) {
+        resetGame();
+    }
+}
+
+function resetGame() {
+    dieSound.play();
+    alert("Game Over! Your score: " + score);
+    player.x = canvasWidth / 2 - 20;
+    player.y = canvasHeight - 100;
+    player.dy = 0;
+    score = 0;
+    cumulativeOffset = 0;
+    leftPressed = false;
+    rightPressed = false;
+    pupilOffsetX = 2;
+    lastDirection = 1;
+    createPlatforms();
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    drawClouds();
+
+    // Player
+    ctx.fillStyle = "green";
+    ctx.beginPath();
+    ctx.arc(player.x + player.width / 2, player.y + player.height / 2, player.width / 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Eyes
+    ctx.fillStyle = "white";
+    ctx.beginPath();
+    ctx.arc(player.x + player.width / 3, player.y + player.height / 3, 5, 0, Math.PI * 2);
+    ctx.arc(player.x + 2 * player.width / 3, player.y + player.height / 3, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Pupils
+    ctx.fillStyle = "black";
+    ctx.beginPath();
+    ctx.arc(player.x + player.width / 3 + pupilOffsetX, player.y + player.height / 3, 2, 0, Math.PI * 2);
+    ctx.arc(player.x + 2 * player.width / 3 + pupilOffsetX, player.y + player.height / 3, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Platforms
+    platforms.forEach(p => {
+        if(p.trampoline) ctx.fillStyle = "purple";
+        else if(p.vx !== 0) ctx.fillStyle = "orange";
+        else ctx.fillStyle = "brown";
+        roundRect(ctx, p.x, p.y, p.width, p.height, 5);
+    });
+
+    // Enemies
+    enemies.forEach(e => {
+        ctx.fillStyle = "red";
+        ctx.beginPath();
+        ctx.arc(e.x + e.width / 2, e.y + e.height / 2, e.width / 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "white";
+        ctx.beginPath();
+        ctx.arc(e.x + e.width / 3, e.y + e.height / 3, 4, 0, Math.PI * 2);
+        ctx.arc(e.x + 2 * e.width / 3, e.y + e.height / 3, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "black";
+        ctx.beginPath();
+        ctx.arc(e.x + e.width / 3 + 2, e.y + e.height / 3, 2, 0, Math.PI * 2);
+        ctx.arc(e.x + 2 * e.width / 3 + 2, e.y + e.height / 3, 2, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    ctx.fillStyle = "black";
+    ctx.font = "20px Arial";
+    ctx.fillText("Score: " + score, 10, 30);
+}
+
+function gameLoop() {
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+createClouds();
+createPlatforms();
+gameLoop();
+</script>
+
+<div id="bottom-info">
+    <a href="index.html">Return to Music Theory Page</a>
+    <span>This game was created by AI under my direction.</span>
+</div>
+</body>
+</html>
